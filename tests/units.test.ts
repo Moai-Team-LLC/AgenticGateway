@@ -56,40 +56,40 @@ describe("edge/auth", () => {
   })
 })
 
-describe("cost/anomaly", () => {
-  const seed = (db: ReturnType<typeof openDb>, keyId: string, usd: number, atMsAgo: number): void => {
-    recordLedger(db, {
-      id: crypto.randomUUID(),
-      tenantId: "t",
-      keyId,
-      runId: null,
-      taskClass: null,
-      model: "m",
-      route: "openai/gpt-4o-mini",
-      inputHash: "h",
-      outcome: "ok",
-      guardTags: [],
-      protectedPathFlag: false,
-      cacheHit: false,
-      inputTokens: 1,
-      outputTokens: 1,
-      costUsd: usd,
-      latencyMs: 1,
-    })
-    db.query("UPDATE request_ledger SET created_at = ? WHERE cost_usd = ? AND created_at > ?").run(
-      Date.now() - atMsAgo,
-      usd,
-      Date.now() - 1000,
-    )
-  }
+const seedLedgerCost = (db: ReturnType<typeof openDb>, keyId: string, usd: number, atMsAgo: number): void => {
+  recordLedger(db, {
+    id: crypto.randomUUID(),
+    tenantId: "t",
+    keyId,
+    runId: null,
+    taskClass: null,
+    model: "m",
+    route: "openai/gpt-4o-mini",
+    inputHash: "h",
+    outcome: "ok",
+    guardTags: [],
+    protectedPathFlag: false,
+    cacheHit: false,
+    inputTokens: 1,
+    outputTokens: 1,
+    costUsd: usd,
+    latencyMs: 1,
+  })
+  db.query("UPDATE request_ledger SET created_at = ? WHERE cost_usd = ? AND created_at > ?").run(
+    Date.now() - atMsAgo,
+    usd,
+    Date.now() - 1000,
+  )
+}
 
+describe("cost/anomaly", () => {
   test("a synthetic spend spike alerts; steady spend does not", () => {
     const db = openDb(":memory:")
     // steady baseline: ~$0.05 per 5-minute bucket over the trailing hour
-    for (let i = 1; i <= 11; i++) seed(db, "k1", 0.05, i * 5 * 60 * 1000)
+    for (let i = 1; i <= 11; i++) seedLedgerCost(db, "k1", 0.05, i * 5 * 60 * 1000)
     expect(checkSpendAnomaly(db, "k1", 5).anomalous).toBe(false)
     // spike: $3 in the last 5 minutes ≫ 5× baseline
-    seed(db, "k1", 3, 60 * 1000)
+    seedLedgerCost(db, "k1", 3, 60 * 1000)
     const verdict = checkSpendAnomaly(db, "k1", 5)
     expect(verdict.anomalous).toBe(true)
     expect(verdict.recentUsd).toBeGreaterThan(2.9)
@@ -97,9 +97,9 @@ describe("cost/anomaly", () => {
 
   test("cold keys need to clear the hard floor", () => {
     const db = openDb(":memory:")
-    seed(db, "k2", 0.3, 60 * 1000) // no baseline, modest spend → no alert
+    seedLedgerCost(db, "k2", 0.3, 60 * 1000) // no baseline, modest spend → no alert
     expect(checkSpendAnomaly(db, "k2", 5).anomalous).toBe(false)
-    seed(db, "k2", 1.5, 30 * 1000)
+    seedLedgerCost(db, "k2", 1.5, 30 * 1000)
     expect(checkSpendAnomaly(db, "k2", 5).anomalous).toBe(true)
   })
 })

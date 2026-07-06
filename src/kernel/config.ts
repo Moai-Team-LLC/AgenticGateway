@@ -40,6 +40,8 @@ const envSchema = z
     AGW_ANOMALY_THROTTLE: boolish,
     APL_INGEST_URL: z.string().url().optional(),
     APL_INGEST_TOKEN: z.string().optional(),
+    /** Optional price-table override file (see src/cost/pricing.ts). */
+    AGW_PRICE_FILE: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AGW_EVIDENCE_SINK === "http" && cfg.AGW_AUDIT_URL === undefined) {
@@ -73,10 +75,16 @@ export interface Config {
   anomalyThrottle: boolean
   aplIngestUrl: string | undefined
   aplIngestToken: string | undefined
+  priceFile: string | undefined
 }
 
 export const loadConfig = (env: Record<string, string | undefined> = process.env): Result<Config, string> => {
-  const parsed = envSchema.safeParse(env)
+  // Treat empty-string env vars as unset — copying .env.example leaves optional
+  // keys as `KEY=` (empty), which would otherwise fail url/length validators
+  // and refuse to start. Empty = not provided.
+  const cleaned: Record<string, string | undefined> = {}
+  for (const [k, v] of Object.entries(env)) cleaned[k] = v === "" ? undefined : v
+  const parsed = envSchema.safeParse(cleaned)
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
     return err(`invalid config: ${issues}`)
@@ -104,5 +112,6 @@ export const loadConfig = (env: Record<string, string | undefined> = process.env
     anomalyThrottle: e.AGW_ANOMALY_THROTTLE,
     aplIngestUrl: e.APL_INGEST_URL,
     aplIngestToken: e.APL_INGEST_TOKEN,
+    priceFile: e.AGW_PRICE_FILE,
   })
 }

@@ -3,9 +3,20 @@
 AgenticGateway composes its siblings; it never re-implements them. Where a sibling
 exposes the needed logic only as an in-process library (no HTTP/npm surface yet),
 the exact source is **vendored verbatim** here, with a provenance header, and pinned
-by sha256 in `PROVENANCE.lock.json`. `provenance.test.ts` fails if a vendored file
-is edited in place, and — when the sibling repo is checked out next to this one —
-if the vendored copy has drifted from the sibling source.
+by sha256 in `PROVENANCE.lock.json`.
+
+Two checks, different strength:
+
+- **The lock is the hard gate.** `provenance.test.ts` and `scripts/sync-vendor.ts
+  --check` fail if a vendored file's sha256 no longer matches
+  `PROVENANCE.lock.json` — i.e. if a vendored file was edited in place. This needs
+  no sibling checkout, so it protects a fresh contributor clone and CI.
+- **Sibling drift is advisory.** When a sibling repo is checked out next to this
+  one, `--check` also compares the vendored copy to the sibling source and *warns*
+  on a mismatch (prompting a deliberate re-sync). It never fails the gate — a
+  sibling may be absent or carry uncommitted local edits. Vendored copies track
+  the sibling's **committed** canonical source (the commit pinned in each header),
+  not a working-tree experiment.
 
 | Vendored file | Source (repo · path · commit) | Mode |
 | --- | --- | --- |

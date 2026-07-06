@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite"
 
 import { makeExactCache } from "../cache/exact"
 import { makeOtelExporter, type OtelExporter } from "../cost/otel"
+import { loadPrices, type Price } from "../cost/pricing"
 import { makeEvidenceEmitter, type EvidenceEmitter } from "../delegate/evidence"
 import type { Config } from "../kernel/config"
 import { constantTimeEq } from "../kernel/crypto"
@@ -59,6 +60,15 @@ export const makeEdgeDeps = (
   } = {},
 ): EdgeDeps => {
   const db = overrides.db ?? openDb(cfg.dbPath)
+  let prices: Record<string, Price> | undefined
+  if (cfg.priceFile !== undefined) {
+    const loaded = loadPrices(cfg.priceFile)
+    if (loaded.isErr()) {
+      log("warn", "price_file_ignored", { path: cfg.priceFile, error: loaded.error })
+    } else {
+      prices = loaded.value
+    }
+  }
   return {
     cfg,
     db,
@@ -67,6 +77,7 @@ export const makeEdgeDeps = (
     readVault: makeVaultReader(db, cfg.vaultKey),
     evidence: overrides.evidence ?? makeEvidenceEmitter(cfg),
     otel: overrides.otel ?? makeOtelExporter({ url: cfg.aplIngestUrl, token: cfg.aplIngestToken }),
+    ...(prices === undefined ? {} : { prices }),
     ...(overrides.judge === undefined ? {} : { judge: overrides.judge }),
     ...(overrides.fetchUpstream === undefined ? {} : { fetchUpstream: overrides.fetchUpstream }),
   }

@@ -48,6 +48,14 @@ function die(message: string): never {
   process.exit(1)
 }
 
+/** Parse a CLI numeric option, refusing NaN/≤0 (a typo must not silently
+ *  provision an unlimited budget). */
+const posNum = (raw: string, name: string): number => {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) die(`${name} must be a positive number (got "${raw}")`)
+  return n
+}
+
 const program = new Command()
 program.name("agw").description("AgenticGateway control plane")
 
@@ -72,8 +80,8 @@ tenant
     const created = createTenant(db, name)
     if (created.isErr()) die(created.error)
     ensureTenantBudget(db, created.value.tenantId, {
-      limitUsd: Number(opts.budgetUsd),
-      windowMs: Number(opts.windowDays) * 24 * 60 * 60 * 1000,
+      limitUsd: posNum(opts.budgetUsd, "--budget-usd"),
+      windowMs: posNum(opts.windowDays, "--window-days") * 24 * 60 * 60 * 1000,
     })
     await audit(cfg, "cli.tenant.create", name)
     console.log(`tenant:     ${name}`)
@@ -109,8 +117,8 @@ tenant
     const t = findTenantByName(db, name)
     if (t === null) die(`unknown tenant "${name}"`)
     ensureTenantBudget(db, t.id, {
-      limitUsd: Number(opts.budgetUsd),
-      windowMs: Number(opts.windowDays) * 24 * 60 * 60 * 1000,
+      limitUsd: posNum(opts.budgetUsd, "--budget-usd"),
+      windowMs: posNum(opts.windowDays, "--window-days") * 24 * 60 * 60 * 1000,
     })
     await audit(cfg, "cli.tenant.budget", name)
     console.log("budget updated")

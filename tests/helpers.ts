@@ -8,6 +8,7 @@ import type { Database } from "bun:sqlite"
 
 import { makeExactCache } from "../src/cache/exact"
 import { ensureTenantBudget } from "../src/cost/budgets"
+import { loadPrices } from "../src/cost/pricing"
 import type { SpanFacts } from "../src/cost/otel"
 import type { EvidenceEvent } from "../src/delegate/evidence"
 import type { JudgeCaller } from "../src/delegate/judge"
@@ -42,6 +43,7 @@ export const testConfig = (over: Partial<Config> = {}): Config => ({
   anomalyThrottle: false,
   aplIngestUrl: undefined,
   aplIngestToken: undefined,
+  priceFile: undefined,
   ...over,
 })
 
@@ -159,6 +161,7 @@ export const setupEdge = (
       dropped: 0,
     },
     fetchUpstream,
+    ...(cfg.priceFile === undefined ? {} : { prices: loadPrices(cfg.priceFile)._unsafeUnwrap() }),
     ...(opts.judge === undefined ? {} : { judge: opts.judge }),
   }
   return {
@@ -196,6 +199,28 @@ export const simpleChat = (model = "openai/gpt-4o-mini", user = "hi, how are you
 
 /** The async assurance lane runs on setTimeout(0) — give it a beat. */
 export const flushAsyncLane = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
+
+/** Builds an SSE body from OpenAI-style events + [DONE]. */
+export const sse = (events: unknown[]): string =>
+  `${events.map((e) => `data: ${JSON.stringify(e)}`).join("\n\n")}\n\ndata: [DONE]\n\n`
+
+export const sseResponse = (events: unknown[]): Response =>
+  new Response(sse(events), { status: 200, headers: { "content-type": "text/event-stream" } })
+
+/** A streaming upstream that emits chunks lazily (so the edge streams, not buffers). */
+export const streamingUpstream =
+  (events: unknown[]) =>
+  (): Response => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder()
+        for (const e of events) controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`))
+        controller.enqueue(enc.encode("data: [DONE]\n\n"))
+        controller.close()
+      },
+    })
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+  }
 
 export const ledgerRow = (db: Database, requestId: string): Record<string, unknown> | null =>
   db.query<Record<string, unknown>, [string]>("SELECT * FROM request_ledger WHERE id = ?").get(requestId)

@@ -79,6 +79,8 @@ export const makeOtelExporter = (opts: {
   url: string | undefined
   token: string | undefined
   flushEvery?: number
+  /** Time-based flush so low-traffic spans don't linger until shutdown. 0 disables. */
+  flushIntervalMs?: number
   fetchImpl?: typeof fetch
 }): OtelExporter => {
   if (opts.url === undefined) {
@@ -86,6 +88,7 @@ export const makeOtelExporter = (opts: {
   }
   const url = opts.url
   const flushEvery = opts.flushEvery ?? 20
+  const flushIntervalMs = opts.flushIntervalMs ?? 5000
   const fetchImpl = opts.fetchImpl ?? fetch
   const byTenant = new Map<string, Record<string, unknown>[]>()
   let queued = 0
@@ -120,6 +123,12 @@ export const makeOtelExporter = (opts: {
       dropped += count // best-effort: telemetry loss never fails a request
     }
   }
+
+  const timer =
+    flushIntervalMs > 0
+      ? (setInterval(() => void flush(), flushIntervalMs) as ReturnType<typeof setInterval> & { unref?: () => void })
+      : null
+  timer?.unref?.() // never keep the process alive for telemetry
 
   return {
     record(facts) {

@@ -88,6 +88,9 @@ export const openDb = (path: string): Database => {
   const db = new Database(path)
   db.exec("PRAGMA journal_mode = WAL;")
   db.exec("PRAGMA foreign_keys = ON;")
+  // the edge and the CLI share one file — wait out a concurrent writer's lock
+  // instead of throwing SQLITE_BUSY into the hot path or the async lane.
+  db.exec("PRAGMA busy_timeout = 5000;")
   db.exec(SCHEMA)
   return db
 }

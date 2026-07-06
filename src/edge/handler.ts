@@ -17,11 +17,11 @@ import { cacheKey, type ExactCache } from "../cache/exact"
 import { checkSpendAnomaly, throttleKey } from "../cost/anomaly"
 import { checkBudgets, recordSpend } from "../cost/budgets"
 import { recordLedger, setJudgeVerdict, type LedgerEntry } from "../cost/ledger"
-import { costUsd } from "../cost/pricing"
+import { costUsd, DEFAULT_PRICES, type Price } from "../cost/pricing"
 import type { OtelExporter } from "../cost/otel"
 import { guardRequest, guardResponseLeak } from "../delegate/guard"
 import { makeJudgeCaller, shouldJudge, type JudgeCaller } from "../delegate/judge"
-import { scanCompletionForProtectedPaths } from "../delegate/protected-paths"
+import { scanCompletionForProtectedPaths, scanToolCalls } from "../delegate/protected-paths"
 import type { EvidenceEmitter } from "../delegate/evidence"
 import type { Config } from "../kernel/config"
 import { newUuid, sha256hex } from "../kernel/crypto"
@@ -53,6 +53,8 @@ export interface HotDeps {
   otel: OtelExporter
   judge?: JudgeCaller
   fetchUpstream?: typeof fetch
+  /** Price table (route → USD/MTok). Defaults to the checked-in table. */
+  prices?: Record<string, Price>
 }
 
 interface Usage {
@@ -61,8 +63,88 @@ interface Usage {
 }
 
 const JUDGE_ITEM_MAX_CHARS = 4000
+/** Bounds the leak/judge text and per-call tool-call JSON kept from a stream —
+ *  NOT the usage capture (that is parsed incrementally, frame by frame). */
 const STREAM_TAP_MAX_CHARS = 262_144
 const POLICY_CACHE_TTL_MS = 10_000
+
+interface ReconstructedToolCall {
+  name: string
+  args: string
+}
+
+interface SseTapResult {
+  text: string
+  usage: Usage | null
+  toolCalls: ReconstructedToolCall[]
+}
+
+/**
+ * Incremental SSE reader for a streamed chat completion. Parses each complete
+ * `data:` line as it arrives so the trailing `usage` frame is always captured
+ * regardless of stream length; accumulates assistant text (bounded) for the
+ * leak/judge checks and reassembles streamed tool-call deltas (index-keyed,
+ * bounded) for the protected-path scan.
+ */
+const makeSseTap = (): { push(chunk: Uint8Array): void; result(): SseTapResult } => {
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let text = ""
+  let usage: Usage | null = null
+  const toolByIndex = new Map<number, { name: string; args: string }>()
+
+  const handleLine = (line: string): void => {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") return
+    let evt: {
+      choices?: { delta?: { content?: unknown; tool_calls?: unknown[] } }[]
+      usage?: Usage
+    }
+    try {
+      evt = JSON.parse(line.slice("data: ".length))
+    } catch {
+      return // partial/foreign SSE lines are fine — tapping is best-effort
+    }
+    const delta = evt.choices?.[0]?.delta
+    if (typeof delta?.content === "string" && text.length < STREAM_TAP_MAX_CHARS) text += delta.content
+    if (Array.isArray(delta?.tool_calls)) {
+      for (const tc of delta.tool_calls as {
+        index?: number
+        function?: { name?: unknown; arguments?: unknown }
+      }[]) {
+        const idx = typeof tc.index === "number" ? tc.index : 0
+        const cur = toolByIndex.get(idx) ?? { name: "", args: "" }
+        if (typeof tc.function?.name === "string") cur.name += tc.function.name
+        if (typeof tc.function?.arguments === "string" && cur.args.length < STREAM_TAP_MAX_CHARS) {
+          cur.args += tc.function.arguments
+        }
+        toolByIndex.set(idx, cur)
+      }
+    }
+    if (evt.usage !== undefined && evt.usage !== null) usage = evt.usage
+  }
+
+  return {
+    push(chunk) {
+      buffer += decoder.decode(chunk, { stream: true })
+      let nl = buffer.indexOf("\n")
+      while (nl !== -1) {
+        handleLine(buffer.slice(0, nl).trimEnd())
+        buffer = buffer.slice(nl + 1)
+        nl = buffer.indexOf("\n")
+      }
+    },
+    result() {
+      if (buffer.length > 0) handleLine(buffer.trimEnd())
+      return {
+        text,
+        usage,
+        toolCalls: [...toolByIndex.values()]
+          .filter((t) => t.name.length > 0)
+          .map((t) => ({ name: t.name, args: t.args })),
+      }
+    },
+  }
+}
 
 const errorResponse = (status: number, code: string, message: string, requestId: string): Response =>
   Response.json(
@@ -73,6 +155,7 @@ const errorResponse = (status: number, code: string, message: string, requestId:
 export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Response>) => {
   const { cfg, db } = deps
   const fetchUpstream = deps.fetchUpstream ?? fetch
+  const prices = deps.prices ?? DEFAULT_PRICES
   const judge = deps.judge ?? makeJudgeCaller({ bifrostUrl: cfg.bifrostUrl, model: cfg.judgeModel })
   const policyCache = new Map<string, { policy: RoutingPolicy | null; at: number }>()
 
@@ -169,10 +252,13 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
     // ── budgets: tenant + run ceilings, fail-closed circuit breaker ──
     const budget = checkBudgets(db, tenantId, runId, cfg.runLimitUsd)
     if (budget.isErr()) {
+      // 429 (retryable) only for an exceeded ceiling; a missing budget is an
+      // operator config error → 403, so SDKs don't retry-storm against it.
+      const missing = budget.error.code === "budget_missing"
       return deny(
-        429,
+        missing ? 403 : 429,
         budget.error.code,
-        `${budget.error.scope} budget ${budget.error.code === "budget_missing" ? "is not provisioned" : "exceeded"}`,
+        `${budget.error.scope} budget ${missing ? "is not provisioned" : "exceeded"}`,
         "denied_budget",
         {},
       )
@@ -215,10 +301,18 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
         const inTok = facts.usage?.prompt_tokens ?? null
         const outTok = facts.usage?.completion_tokens ?? null
         const routeUsed = facts.routeUsed ?? decision.model
-        const cost =
-          facts.cacheHit || inTok === null
-            ? { usd: 0, known: true }
-            : costUsd(routeUsed, inTok, outTok ?? 0)
+        // A cache hit costs $0 (real); a served response whose usage never
+        // arrived is UNMETERED — record NULL cost (never a silent zero) and
+        // warn, so under-metering is visible rather than looking free.
+        const metered = !facts.cacheHit && inTok !== null
+        const costUsdValue: number | null = facts.cacheHit
+          ? 0
+          : inTok === null
+            ? null
+            : costUsd(routeUsed, inTok, outTok ?? 0, prices).usd
+        if (!facts.cacheHit && inTok === null && (facts.outcome === "ok" || facts.outcome === "client_aborted")) {
+          log("warn", "unmetered_response", { request_id: requestId, route: routeUsed, outcome: facts.outcome })
+        }
         recordLedger(db, {
           ...ledgerBase,
           taskClass: decision.taskClass,
@@ -229,11 +323,11 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           cacheHit: facts.cacheHit,
           inputTokens: inTok,
           outputTokens: outTok,
-          costUsd: facts.cacheHit ? 0 : cost.usd,
+          costUsd: costUsdValue,
           latencyMs: facts.latencyMs,
         })
-        if (!facts.cacheHit && inTok !== null) {
-          recordSpend(db, tenantId, runId, inTok + (outTok ?? 0), cost.usd)
+        if (metered) {
+          recordSpend(db, tenantId, runId, inTok + (outTok ?? 0), costUsdValue ?? 0)
         }
         deps.evidence.emit({
           event: "GatewayRequest",
@@ -245,7 +339,7 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           route: routeUsed,
           outcome: facts.outcome,
           tokens: inTok === null ? undefined : inTok + (outTok ?? 0),
-          cost_usd: facts.cacheHit ? 0 : cost.usd,
+          ...(costUsdValue === null ? {} : { cost_usd: costUsdValue }),
           cache_hit: facts.cacheHit,
           tags: facts.piiKinds.map((k) => `pii:${k}`),
         } as Parameters<EvidenceEmitter["emit"]>[0])
@@ -279,7 +373,7 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           provider,
           inputTokens: inTok,
           outputTokens: outTok,
-          costUsd: facts.cacheHit ? 0 : cost.usd,
+          costUsd: costUsdValue,
           outcome: facts.outcome,
           cacheHit: facts.cacheHit,
           startMs,
@@ -370,12 +464,12 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
     // ── upstream credential from the vault (never exposed to the client) ──
     const vk = deps.readVault(tenantId)
     if (vk.isErr()) {
-      return deny(500, "vault_error", "upstream credential unavailable", "denied_policy", {
+      return deny(500, "vault_error", "upstream credential unavailable", "denied_vault", {
         taskClass: decision.taskClass,
       })
     }
     if (vk.value === null && cfg.requireVk) {
-      return deny(403, "no_upstream_credential", "tenant has no vaulted upstream credential", "denied_policy", {
+      return deny(403, "no_upstream_credential", "tenant has no vaulted upstream credential", "denied_vault", {
         taskClass: decision.taskClass,
       })
     }
@@ -395,7 +489,8 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
         body: isStream
           ? JSON.stringify({
               ...forwardBody,
-              stream_options: { include_usage: true, ...chat.stream_options },
+              // gateway metering is non-overridable: our flag wins over the client's.
+              stream_options: { ...chat.stream_options, include_usage: true },
             })
           : normalized,
       })
@@ -416,67 +511,104 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
     }
 
     if (!upstream.ok) {
+      // never echo an upstream error body verbatim — it may carry provider
+      // detail or secrets. Reference it by hash (hash-not-text) and return a
+      // sanitized gateway error.
       const errText = await upstream.text()
-      scheduleFinalize({
-        outcome: "upstream_error",
-        routeUsed: decision.model,
-        usage: null,
-        cacheHit: false,
-        responseText: null,
-        protectedFlagged: false,
-        protectedHits: [],
-        leak: { leaked: false },
-        piiKinds: guarded.piiKinds,
-      })
-      return new Response(errText, {
-        status: upstream.status,
-        headers: { "content-type": "application/json", "x-agw-request-id": requestId },
-      })
-    }
-
-    // ── streaming: pass through untouched; tap in the async lane ──
-    if (isStream) {
-      let tapped = ""
-      let usage: Usage | null = null
-      const decoder = new TextDecoder()
-      const tap = new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          controller.enqueue(chunk)
-          if (tapped.length < STREAM_TAP_MAX_CHARS) tapped += decoder.decode(chunk, { stream: true })
-        },
-        flush() {
-          let text = ""
-          for (const line of tapped.split("\n")) {
-            if (!line.startsWith("data: ") || line === "data: [DONE]") continue
-            try {
-              const evt = JSON.parse(line.slice("data: ".length)) as {
-                choices?: { delta?: { content?: unknown } }[]
-                usage?: Usage
-              }
-              const delta = evt.choices?.[0]?.delta?.content
-              if (typeof delta === "string") text += delta
-              if (evt.usage !== undefined && evt.usage !== null) usage = evt.usage
-            } catch {
-              // partial/foreign SSE lines are fine — tapping is best-effort
-            }
-          }
-          // streamed bytes are already with the client: leak/policy = flag-only
-          // (flush runs after the stream closed — already off the hot path)
+      const latencyMs = latency()
+      setTimeout(
+        () =>
           finalize({
-            latencyMs: latency(),
-            outcome: "ok",
+            latencyMs,
+            outcome: "upstream_error",
             routeUsed: decision.model,
-            usage,
+            usage: null,
             cacheHit: false,
-            responseText: text.length > 0 ? text : null,
+            responseText: null,
             protectedFlagged: false,
             protectedHits: [],
-            leak: text.length > 0 ? guardResponseLeak(chat.messages, text) : { leaked: false },
+            leak: { leaked: false },
             piiKinds: guarded.piiKinds,
-          })
+          }),
+        0,
+      )
+      log("warn", "upstream_error", { request_id: requestId, status: upstream.status, body_hash: sha256hex(errText) })
+      return errorResponse(
+        upstream.status >= 500 ? 502 : upstream.status,
+        "upstream_error",
+        "the data plane returned an error",
+        requestId,
+      )
+    }
+
+    // ── streaming: pass through byte-identical; meter + gate in the async
+    //    lane. A manual ReadableStream (not a TransformStream) so finalize
+    //    fires on EVERY termination — normal close, upstream error mid-stream,
+    //    and client abort — never silently unmetered. Usage is parsed
+    //    incrementally so the trailing usage frame is captured on streams of
+    //    any length; only the leak/judge text and tool-call JSON are bounded. ──
+    if (isStream) {
+      if (upstream.body === null) {
+        scheduleFinalize({
+          outcome: "ok",
+          routeUsed: decision.model,
+          usage: null,
+          cacheHit: false,
+          responseText: null,
+          protectedFlagged: false,
+          protectedHits: [],
+          leak: { leaked: false },
+          piiKinds: guarded.piiKinds,
+        })
+        return new Response(null, {
+          status: upstream.status,
+          headers: { "x-agw-request-id": requestId, "x-agw-route": decision.model, "x-agw-cache": "miss" },
+        })
+      }
+      const reader = upstream.body.getReader()
+      const parser = makeSseTap()
+      let done = false
+      const settle = (outcome: LedgerEntry["outcome"]): void => {
+        if (done) return
+        done = true
+        const tap = parser.result()
+        const scan = scanToolCalls(tap.toolCalls)
+        scheduleFinalize({
+          outcome,
+          routeUsed: decision.model,
+          usage: tap.usage,
+          cacheHit: false,
+          responseText: tap.text.length > 0 ? tap.text : null,
+          // streamed bytes are already with the client: policy/leak = flag-only
+          protectedFlagged: scan.flagged,
+          protectedHits: scan.hits,
+          leak: tap.text.length > 0 ? guardResponseLeak(chat.messages, tap.text) : { leaked: false },
+          piiKinds: guarded.piiKinds,
+        })
+      }
+      const streamBody = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const { done: streamDone, value } = await reader.read()
+            if (streamDone) {
+              controller.close()
+              settle("ok")
+              return
+            }
+            controller.enqueue(value)
+            parser.push(value)
+          } catch (e) {
+            log("warn", "stream_upstream_error", { request_id: requestId, error: String(e) })
+            controller.error(e)
+            settle("upstream_error")
+          }
+        },
+        cancel(reason) {
+          void reader.cancel(reason)
+          settle("client_aborted")
         },
       })
-      return new Response(upstream.body === null ? null : upstream.body.pipeThrough(tap), {
+      return new Response(streamBody, {
         status: upstream.status,
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
@@ -541,9 +673,11 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
       return errorResponse(403, "protected_path", "tool call reaches a protected control path", requestId)
     }
 
-    deps.cache.set(key, completionText)
+    // Only cache a well-formed completion; never store a body we could not
+    // parse (it would be replayed as a bogus "success" and skew analytics).
+    if (completion !== null) deps.cache.set(key, completionText)
     scheduleFinalize({
-      outcome: "ok",
+      outcome: completion === null ? "upstream_error" : "ok",
       routeUsed,
       usage: c?.usage ?? null,
       cacheHit: false,

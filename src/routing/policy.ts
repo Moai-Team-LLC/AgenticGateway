@@ -63,7 +63,13 @@ export const loadPolicy = (db: Database, tenantId: string): Result<RoutingPolicy
     db.query<{ doc: string }, [string]>("SELECT doc FROM routing_policies WHERE tenant_id = ?").get(tenantId) ??
     db.query<{ doc: string }, [string]>("SELECT doc FROM routing_policies WHERE tenant_id = ?").get("*")
   if (row === null) return ok(null)
-  const parsed = routingPolicySchema.safeParse(JSON.parse(row.doc))
+  let doc: unknown
+  try {
+    doc = JSON.parse(row.doc)
+  } catch {
+    return err("stored routing policy is not valid JSON — refusing to route on it")
+  }
+  const parsed = routingPolicySchema.safeParse(doc)
   if (!parsed.success) return err("stored routing policy failed validation — refusing to route on it")
   return ok(parsed.data)
 }

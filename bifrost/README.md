@@ -23,9 +23,17 @@ Notes that bite (verified against the v1.6.x docs):
   the per-request `fallbacks` array. For client-independent failover, create a
   **virtual key** with multiple `provider_configs` (weights + allowed_models) —
   Bifrost auto-builds fallback chains for it.
-- **Governance / virtual keys** (production): create per-tenant VKs
-  (`sk-bf-*`, with budgets + rate limits) via the Bifrost UI or
-  `POST /api/governance/virtual-keys`, then vault each into the gateway with
+- **Governance / virtual keys** (production): per-tenant VKs (`sk-bf-*`, with
+  budgets + rate limits). Two ways, depending on how you run Bifrost:
+  - **File-only mode (default here, `config_store.enabled: false`):** declare a
+    `governance` block with virtual keys in `data/config.json` — the UI and
+    `POST /api/governance/...` are read-only paths when the store is disabled,
+    so the file is the source of truth.
+  - **Store mode (`config_store.enabled: true`):** create VKs in the Bifrost
+    UI or via `POST /api/governance/virtual-keys`; DB state then wins over
+    `config.json`, so don't also declare them in the file.
+
+  Either way, vault each VK into the gateway with
   `agw tenant set-upstream <tenant> --secret sk-bf-…` and set
   `AGW_REQUIRE_VK=true`.
 - **Semantic cache**: built-in plugin, needs a vector store. Run the

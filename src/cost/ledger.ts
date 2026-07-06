@@ -19,9 +19,11 @@ export interface LedgerEntry {
   outcome:
     | "ok"
     | "cache_hit"
+    | "client_aborted"
     | "denied_guard"
     | "denied_budget"
     | "denied_policy"
+    | "denied_vault"
     | "denied_output"
     | "upstream_error"
   guardTags: string[]

@@ -16,8 +16,10 @@ const siblingsRoot = process.env["AGW_SIBLINGS_ROOT"] ?? resolve(repoRoot, "..")
 
 interface VendorEntry {
   vendor: string
-  /** Path under a sibling checkout; null for excerpt files (manual sync). */
-  source: string | null
+  /** Repo dir candidates (public name first, maintainer checkout name second)
+   *  + path within it; null source = excerpt file with no full-copy check. */
+  repoDirs: string[]
+  sourcePath: string | null
   /** For full copies: vendored body below the provenance header must equal the source. */
   mode: "full" | "excerpt"
 }
@@ -25,22 +27,45 @@ interface VendorEntry {
 const ENTRIES: VendorEntry[] = [
   {
     vendor: "vendor/agenticmind/guard.ts",
-    source: "agenticmind-org/packages/shared/src/lib/knowledge/guard.ts",
+    repoDirs: ["AgenticMind", "agenticmind-org"],
+    sourcePath: "packages/shared/src/lib/knowledge/guard.ts",
     mode: "full",
   },
   {
     vendor: "vendor/agent-assurance/protected-paths.json",
-    source: "agent-assurance/policy-pack/protected-paths.json",
+    repoDirs: ["AgenticAssurance", "agent-assurance"],
+    sourcePath: "policy-pack/protected-paths.json",
     mode: "full",
   },
-  { vendor: "vendor/apl/judge.ts", source: "apl/packages/core/src/judge/runner.ts", mode: "excerpt" },
-  { vendor: "vendor/apl/sampling.ts", source: "apl/packages/core/src/eval/mining.ts", mode: "excerpt" },
+  {
+    vendor: "vendor/apl/judge.ts",
+    repoDirs: ["AgenticPerformance", "apl"],
+    sourcePath: "packages/core/src/judge/runner.ts",
+    mode: "excerpt",
+  },
+  {
+    vendor: "vendor/apl/sampling.ts",
+    repoDirs: ["AgenticPerformance", "apl"],
+    sourcePath: "packages/core/src/eval/mining.ts",
+    mode: "excerpt",
+  },
   {
     vendor: "vendor/agent-assurance/protected-paths.ts",
-    source: "agent-assurance/src/policy/protected-paths.ts",
+    repoDirs: ["AgenticAssurance", "agent-assurance"],
+    sourcePath: "src/policy/protected-paths.ts",
     mode: "excerpt",
   },
 ]
+
+/** First repoDir that exists under siblingsRoot, else null. */
+const resolveSource = (entry: VendorEntry): string | null => {
+  if (entry.sourcePath === null) return null
+  for (const dir of entry.repoDirs) {
+    const candidate = resolve(siblingsRoot, dir, entry.sourcePath)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex")
 
@@ -52,32 +77,36 @@ export const vendoredBody = (vendorPath: string, content: string): string => {
 }
 
 const checkOnly = process.argv.includes("--check")
-let drift = false
+// The HARD gate is the provenance lock (vendored sha256 == lock) — it catches
+// in-place edits with no sibling checkout, so it protects a fresh contributor
+// clone and CI. Sibling drift is ADVISORY: a sibling may be absent or have
+// uncommitted local edits, so it warns (to prompt a deliberate re-sync) but
+// never fails the gate.
+let lockMismatch = false
 const lock: Record<string, string> = {}
 
 for (const entry of ENTRIES) {
   const vendorAbs = resolve(repoRoot, entry.vendor)
   const vendorContent = readFileSync(vendorAbs, "utf8")
-  const sourceAbs = entry.source === null ? null : resolve(siblingsRoot, entry.source)
+  const sourceAbs = resolveSource(entry)
 
-  if (sourceAbs !== null && existsSync(sourceAbs)) {
+  if (sourceAbs !== null) {
     const sourceContent = readFileSync(sourceAbs, "utf8")
     if (entry.mode === "full") {
       const body = vendoredBody(entry.vendor, vendorContent)
       if (body !== sourceContent) {
-        drift = true
         if (checkOnly) {
-          console.error(`DRIFT (full copy): ${entry.vendor} != ${entry.source}`)
+          console.warn(`warn: ${entry.vendor} differs from sibling ${sourceAbs} — re-sync if that checkout is canonical`)
         } else {
           const header = vendorContent.slice(0, vendorContent.length - body.length)
           writeFileSync(vendorAbs, header + sourceContent)
-          console.log(`synced: ${entry.vendor} from ${entry.source}`)
+          console.log(`synced: ${entry.vendor} from ${sourceAbs}`)
         }
       }
     } else {
       // Excerpts are hand-synced; surface upstream changes for review.
       console.log(
-        `excerpt ${entry.vendor}: upstream ${entry.source} sha256=${sha256(sourceContent).slice(0, 16)} — review by hand if changed`,
+        `excerpt ${entry.vendor}: upstream sha256=${sha256(sourceContent).slice(0, 16)} — review by hand if changed`,
       )
     }
   } else if (checkOnly) {
@@ -92,11 +121,11 @@ const lockJson = `${JSON.stringify(lock, null, 2)}\n`
 if (checkOnly) {
   const current = existsSync(lockPath) ? readFileSync(lockPath, "utf8") : ""
   if (current !== lockJson) {
-    drift = true
-    console.error("DRIFT: vendor/PROVENANCE.lock.json does not match vendored files")
+    lockMismatch = true
+    console.error("FAIL: a vendored file was edited in place (sha256 != vendor/PROVENANCE.lock.json)")
   }
-  if (drift) process.exit(1)
-  console.log("vendor: clean")
+  if (lockMismatch) process.exit(1)
+  console.log("vendor: lock clean")
 } else {
   writeFileSync(lockPath, lockJson)
   console.log("wrote vendor/PROVENANCE.lock.json")

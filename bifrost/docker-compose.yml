@@ -16,6 +16,11 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/app/data # config.json lives here (GitOps mode: config_store disabled)
+    # provider keys come from the repo-root .env (this compose file lives in
+    # bifrost/, so name it explicitly rather than relying on compose's default).
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       # env-ref'd by data/config.json ("value": "env.OPENAI_API_KEY") — keys
       # never appear in config files or in the control plane.

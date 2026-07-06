@@ -115,8 +115,12 @@ for (let i = 0; i < 50; i++) {
   edgeTtfb.push(await ttfb(edgeUrl, body(3_000_000 + i, true), true))
 }
 
+// let the async assurance lane drain before tearing down the shared db
+await new Promise((r) => setTimeout(r, 50))
 upstream.stop()
 edge.stop()
+await deps.evidence.flush()
+await deps.otel.flush()
 deps.db.close()
 
 const overheadMs = p50(miss) - p50(direct)

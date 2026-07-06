@@ -59,12 +59,19 @@ ECOSYSTEM.md's convention). "Layer" numbers refer to the Standard's
    its main. The default sink is therefore a local JSONL file with the same
    hash-not-text shape; flip `AGW_EVIDENCE_SINK=http` once the endpoint lands.
 3. **Streaming output gates are flag-only.** Streamed bytes are already with
-   the client, so the leak check on the accumulated stream can only record
-   evidence, not block. Non-streaming responses are gated fail-closed.
+   the client, so the leak check and protected-path scan on the reassembled
+   stream (tool calls reconstructed from SSE deltas) can only record evidence,
+   not block. Non-streaming responses are gated fail-closed. Metering, by
+   contrast, is robust on streams of any length: usage is parsed incrementally
+   (never lost to the text cap), the forced `include_usage` is non-overridable,
+   and a client abort or mid-stream upstream error still lands a ledger row.
 4. **Guard scope.** Injection patterns are AgenticMind's EN+RU regex set —
-   deterministic and sub-ms by design, not an ML classifier. PII in requests is
-   tagged for evidence, not redacted: a gateway must not alter payloads it
-   forwards (AgenticMind redacts at its own memory-write boundary).
+   deterministic and sub-ms by design, not an ML classifier. It guards the
+   latest user turn (the new untrusted input), not the whole re-sent history
+   (which would permanently block a conversation after one flagged turn) nor
+   the operator's own system prompt. PII in requests is tagged for evidence,
+   not redacted: a gateway must not alter payloads it forwards (AgenticMind
+   redacts at its own memory-write boundary).
 5. **Judge verdicts feed the ledger, not yet the policy.** Sampled judge
    results land in `request_ledger.judge_verdict` (and evidence); closing the
    loop into the next routing sync is a roadmap item (T6.3's "over time").

@@ -65,7 +65,9 @@ describe("hot path — end to end against a mock Bifrost", () => {
     const edge = setupEdge()
     const orphan = createTenant(edge.db, "no-budget")._unsafeUnwrap()
     const res = await edge.handler(chatReq(orphan.clientKey, simpleChat()))
-    expect(res.status).toBe(429)
+    // an unprovisioned budget is an operator config error → 403 (not a
+    // retryable 429, which would provoke SDK retry storms)
+    expect(res.status).toBe(403)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("budget_missing")
     expect(edge.calls).toHaveLength(0)
   })
@@ -119,13 +121,16 @@ describe("hot path — end to end against a mock Bifrost", () => {
   test("the vaulted upstream credential is attached to Bifrost and never reaches the client", async () => {
     const edge = setupEdge({
       vkSecret: "sk-bf-vaulted-secret",
-      upstream: () => Response.json({ error: { message: "upstream exploded" } }, { status: 500 }),
+      upstream: () => Response.json({ error: { message: "upstream exploded with sk-bf-vaulted-secret" } }, { status: 500 }),
     })
     const res = await edge.handler(chatReq(edge.clientKey, simpleChat()))
     expect(edge.calls[0]?.headers["authorization"]).toBe("Bearer sk-bf-vaulted-secret")
-    expect(res.status).toBe(500)
+    // a 5xx upstream is sanitized to a 502 gateway error; the raw upstream body
+    // (which could carry provider detail or a leaked secret) is never echoed
+    expect(res.status).toBe(502)
     const text = await res.text()
     expect(text).not.toContain("sk-bf-vaulted-secret")
+    expect(text).not.toContain("upstream exploded")
     for (const [, v] of res.headers) expect(v).not.toContain("sk-bf-vaulted-secret")
     await flushAsyncLane()
     expect(JSON.stringify(edge.events)).not.toContain("sk-bf-vaulted-secret")
