@@ -1,0 +1,32 @@
+# AgenticGateway data plane — Bifrost owns provider abstraction, failover,
+# load-balancing, retries, streaming. The control plane (bun run dev) talks to
+# it on :8080 and never calls a provider directly.
+#
+#   docker compose -f bifrost/docker-compose.yml up -d
+#   curl -fsS localhost:8080/health
+#
+# Optional semantic cache (Bifrost's built-in `semantic_cache` plugin needs a
+# vector store):  docker compose -f bifrost/docker-compose.yml --profile semantic-cache up -d
+# then add the plugin block from bifrost/README.md to data/config.json.
+
+services:
+  bifrost:
+    image: maximhq/bifrost:v1.6.2 # pin; verify plugin/config docs against this tag when bumping
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data # config.json lives here (GitOps mode: config_store disabled)
+    environment:
+      # env-ref'd by data/config.json ("value": "env.OPENAI_API_KEY") — keys
+      # never appear in config files or in the control plane.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
+    # the image ships its own HEALTHCHECK (wget /health)
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["semantic-cache"]
+    ports:
+      - "6379:6379"
+    restart: unless-stopped

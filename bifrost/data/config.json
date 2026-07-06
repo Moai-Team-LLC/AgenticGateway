@@ -1,0 +1,20 @@
+{
+  "config_store": { "enabled": false },
+  "providers": {
+    "openai": {
+      "keys": [
+        { "name": "openai-key", "value": "env.OPENAI_API_KEY", "models": ["*"], "weight": 1.0 }
+      ],
+      "network_config": {
+        "max_retries": 3,
+        "retry_backoff_initial": 500,
+        "retry_backoff_max": 5000
+      }
+    },
+    "anthropic": {
+      "keys": [
+        { "name": "anthropic-key", "value": "env.ANTHROPIC_API_KEY", "models": ["*"], "weight": 1.0 }
+      ]
+    }
+  }
+}

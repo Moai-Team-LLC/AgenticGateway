@@ -1,0 +1,63 @@
+{
+  "evalRunId": "3f6de2a1-6c1e-4b0a-9d2f-example-run",
+  "exportedAt": "2026-07-01T12:00:00Z",
+  "entries": [
+    {
+      "taskClass": "default",
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "passRate": 0.92,
+      "total": 40,
+      "costPerMTokIn": 0.15,
+      "costPerMTokOut": 0.6,
+      "latencyP50Ms": 800
+    },
+    {
+      "taskClass": "default",
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5",
+      "passRate": 0.9,
+      "total": 40,
+      "costPerMTokIn": 1,
+      "costPerMTokOut": 5,
+      "latencyP50Ms": 700
+    },
+    {
+      "taskClass": "reasoning",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "passRate": 0.97,
+      "total": 40,
+      "costPerMTokIn": 3,
+      "costPerMTokOut": 15,
+      "highRisk": true
+    },
+    {
+      "taskClass": "reasoning",
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "passRate": 0.93,
+      "total": 40,
+      "costPerMTokIn": 2,
+      "costPerMTokOut": 8
+    },
+    {
+      "taskClass": "code",
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "passRate": 0.95,
+      "total": 40,
+      "costPerMTokIn": 2,
+      "costPerMTokOut": 8
+    },
+    {
+      "taskClass": "code",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "passRate": 0.91,
+      "total": 40,
+      "costPerMTokIn": 3,
+      "costPerMTokOut": 15
+    }
+  ]
+}

@@ -2,9 +2,9 @@
 node_modules/
 
 # runtime state (control-plane store, evidence, caches)
-data/
-bifrost/data/config.db
-bifrost/data/logs/
+/data/
+bifrost/data/*
+!bifrost/data/config.json
 
 # env & secrets — never commit
 .env
