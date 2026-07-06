@@ -1,0 +1,44 @@
+{
+  "name": "agentic-gateway",
+  "version": "0.1.0",
+  "description": "One OpenAI-compatible key for the whole agent fleet — provider access (Layer 1) and cost & FinOps (Layer 9) on a Bifrost data plane. A reference implementation of the Agentic Product Standard.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Moai-Team-LLC/AgenticGateway.git"
+  },
+  "keywords": [
+    "llm-gateway",
+    "finops",
+    "agentic",
+    "bifrost",
+    "openai-compatible",
+    "cost-control",
+    "agentic-product-standard"
+  ],
+  "scripts": {
+    "dev": "bun run src/cli.ts serve",
+    "check": "bun run lint && bun run tsc && bun run test && bun run no-reimpl",
+    "lint": "oxlint",
+    "tsc": "tsc --noEmit",
+    "test": "bun test",
+    "no-reimpl": "bash scripts/no-reimpl-check.sh",
+    "bench": "bun run scripts/bench.ts",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "neverthrow": "^8.2.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.0",
+    "@commitlint/config-conventional": "^19.8.0",
+    "@dotenvx/dotenvx": "^1.44.0",
+    "@types/bun": "^1.2.0",
+    "husky": "^9.1.7",
+    "oxlint": "^1.0.0",
+    "typescript": "^5.8.0"
+  }
+}

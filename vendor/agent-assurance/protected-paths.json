@@ -1,0 +1,18 @@
+{
+  "$comment": "Single source of truth for the Cycle-of-Trust boundary. The agent may modify prompts/context/manifests, but NEVER its own tools, permission grants, permission modes, or hook policies. `globs` gate file-writing tools (Write/Edit); `shellMarkers` are substring guards for Bash. Consumed by policy-pack/hooks/guard-protected-paths.mjs, by policy-pack/settings.json deny rules, and by src/policy/protected-paths.ts (drift is caught by src/policy/protected-paths.test.ts).",
+  "globs": [
+    "**/.claude/settings.json",
+    "**/.claude/settings.local.json",
+    "**/.claude/hooks/**",
+    "**/.claude/agents/**",
+    "**/.mcp.json"
+  ],
+  "shellMarkers": [
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/hooks/",
+    ".claude/agents/",
+    ".mcp.json",
+    "managed-settings.json"
+  ]
+}

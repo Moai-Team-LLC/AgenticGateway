@@ -1,0 +1,11 @@
+AgenticGateway
+Copyright 2026 Moai Team LLC
+
+This product includes software developed for the AgenticGateway project.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product vendors, verbatim and with provenance headers, small contract
+modules from its sibling projects (see vendor/PROVENANCE.md):
+- AgenticMind (Apache-2.0) — input/output guard, packages/shared guard.ts
+- AgenticPerformance (Apache-2.0) — judge runner and deterministic sampling
+- AgenticAssurance (MIT) — Cycle-of-Trust protected-path pack and matcher

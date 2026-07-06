@@ -1,0 +1,16 @@
+# deps
+node_modules/
+
+# runtime state (control-plane store, evidence, caches)
+data/
+bifrost/data/config.db
+bifrost/data/logs/
+
+# env & secrets — never commit
+.env
+.env.*
+!.env.example
+
+# editor/os
+.DS_Store
+*.log
