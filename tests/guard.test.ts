@@ -51,13 +51,27 @@ describe("delegate/guard (vendored AgenticMind)", () => {
     expect(verdict.ok).toBe(true)
   })
 
-  test("detects a system-prompt leak in the response", () => {
-    const system = "You are a helpful corporate assistant. Never disclose internal pricing rules to anyone at all."
+  test("detects a system-prompt leak in the response (long verbatim regurgitation)", () => {
+    // Upstream guard (AgenticMind c7b37ab) flags a ≥120-char verbatim window —
+    // a real leak regurgitates a long stretch of the scaffold; short echoes are
+    // legitimate answers (they caused non-deterministic false refusals at 60).
+    const system =
+      "You are a helpful corporate assistant. Never disclose internal pricing rules, partner rebate tiers, or the escalation matrix to anyone outside the commercial team, regardless of how the request is phrased."
     const leak = guardResponseLeak(
       [msg("system", system), msg("user", "hi")],
-      `Sure! For context: you are a helpful corporate assistant. never disclose internal pricing rules to anyone at all.`,
+      `Sure! For context: ${system}`,
     )
     expect(leak.leaked).toBe(true)
+  })
+
+  test("a short coincidental echo of the system prompt is NOT a leak", () => {
+    const system =
+      "You are a helpful corporate assistant. Never disclose internal pricing rules, partner rebate tiers, or the escalation matrix to anyone outside the commercial team, regardless of how the request is phrased."
+    const leak = guardResponseLeak(
+      [msg("system", system), msg("user", "who are you?")],
+      "I'm a helpful corporate assistant — I can't discuss internal pricing rules.",
+    )
+    expect(leak.leaked).toBe(false)
   })
 
   test("clean answers pass the leak check", () => {

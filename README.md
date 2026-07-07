@@ -16,7 +16,7 @@ ceilings, caching, and an evidence trail behind it — on a
 | | Member | Role | License |
 |---|---|---|---|
 | 📐 | [agentic-product-standard](https://github.com/Moai-Team-LLC/agentic-product-standard) | The doctrine: 12 factors, 8-layer harness, autonomy ladder, scorecard | MIT |
-| ⚙️ | [AgenticOps](https://github.com/Moai-Team-LLC/AgenticOps) | Runtime & fleet operations — runs agents as governed, budgeted jobs | Apache-2.0 |
+| ⚙️ | [AgenticOps](https://github.com/Moai-Team-LLC/AgenticOps) | Runtime & fleet operations — manifests, scheduling, durable backlog, bounded runs, fleet health | Apache-2.0 |
 | 🧠 | [AgenticMind](https://github.com/Moai-Team-LLC/AgenticMind) | Auditable knowledge & memory: grounded answers, guardrails, evidence sink | Apache-2.0 |
 | 📈 | [AgenticPerformance](https://github.com/Moai-Team-LLC/AgenticPerformance) | Evals & observability: OTel traces, golden-set evals, improvement loop | Apache-2.0 |
 | 🩹 | [AgenticSelfHealingCode](https://github.com/Moai-Team-LLC/AgenticSelfHealingCode) | Self-healing: repairs what breaks in production | Apache-2.0 |

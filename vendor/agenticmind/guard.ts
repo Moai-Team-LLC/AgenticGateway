@@ -2,7 +2,7 @@
  * VENDORED — do not edit. Re-sync with `bun run scripts/sync-vendor.ts`.
  *
  * Source:  AgenticMind `packages/shared/src/lib/knowledge/guard.ts`
- * Commit:  745f6ba18601a9e2baa78a8f74a2196e246b10c9
+ * Commit:  c7b37ab63768a3aa53c85696cb9b0c37136e5981
  * License: Apache-2.0 (Moai Team LLC)
  * Changes: none — byte-identical below this header (drift-checked by
  *          vendor/provenance.test.ts against vendor/PROVENANCE.lock.json).
@@ -140,7 +140,13 @@ export const detectOutputLeak = (
 ): { leaked: boolean; reason?: string } => {
   const a = normWs(answer)
   const sp = normWs(systemPrompt)
-  const WINDOW = 60
+  // A real system-prompt leak regurgitates a long verbatim stretch of the
+  // instruction scaffold. Coincidental overlaps — a common guideline phrase, a
+  // restated caller-context fact, or prose resembling the prompt's example
+  // answers — are short. A 60-char window flagged those legitimate answers
+  // (non-deterministic false refusals); 120 chars keeps real-leak detection
+  // (any regurgitated instruction sentence is longer) while dropping the noise.
+  const WINDOW = 120
   for (let i = 0; i + WINDOW <= sp.length; i += 20) {
     if (a.includes(sp.slice(i, i + WINDOW))) {
       return { leaked: true, reason: "verbatim system-prompt span" }
