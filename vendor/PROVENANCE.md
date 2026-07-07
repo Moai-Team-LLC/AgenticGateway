@@ -20,7 +20,7 @@ Two checks, different strength:
 
 | Vendored file | Source (repo · path · commit) | Mode |
 | --- | --- | --- |
-| `agenticmind/guard.ts` | AgenticMind · `packages/shared/src/lib/knowledge/guard.ts` · `745f6ba` | full copy |
+| `agenticmind/guard.ts` | AgenticMind · `packages/shared/src/lib/knowledge/guard.ts` · `c7b37ab` | full copy |
 | `apl/judge.ts` | AgenticPerformance · `packages/core/src/judge/runner.ts` + `packages/core/src/ai.ts` (types) · `d88f049` | documented excerpt |
 | `apl/sampling.ts` | AgenticPerformance · `packages/core/src/eval/mining.ts` (`hashUnit`) · `d88f049` | documented excerpt |
 | `agent-assurance/protected-paths.json` | AgenticAssurance · `policy-pack/protected-paths.json` · `f6855b9` | full copy |
