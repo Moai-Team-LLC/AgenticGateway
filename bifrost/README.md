@@ -11,6 +11,39 @@ docker compose -f bifrost/docker-compose.yml up -d
 curl -fsS localhost:8080/health
 ```
 
+## Other providers
+
+The shipped `data/config.json` wires **OpenAI** + **Anthropic**. Bifrost is
+multi-provider — add or swap providers by editing that file (keys are always
+env-ref'd, never inline). Two paths beyond the defaults, both dogfood-verified:
+
+**OpenRouter** (one key, hundreds of models). Add a native `openrouter` provider
+and set `OPENROUTER_API_KEY` in `.env`:
+
+```json
+"openrouter": {
+  "keys": [
+    { "name": "openrouter-key", "value": "env.OPENROUTER_API_KEY", "models": ["*"], "weight": 1.0 }
+  ]
+}
+```
+
+Then either passthrough a provider-prefixed model (`openrouter/openai/gpt-4o-mini`)
+or, for `agw:auto`, sync an eval export whose entries carry `"provider":
+"openrouter"` so routing resolves to OpenRouter slugs —
+`fixtures/apl-eval-export.openrouter.json` is a ready example:
+
+```bash
+bun run src/cli.ts routing sync --from-file fixtures/apl-eval-export.openrouter.json
+```
+
+**Local models** (Ollama / vLLM / LM Studio — OpenAI-compatible). Register the
+local endpoint as a Bifrost **custom provider** (see the Bifrost docs for the
+`custom_provider_config` schema). ⚠️ Field note (v1.6.2): `network_config.base_url`
+on a *native* provider did **not** reliably repoint it at a local/compatible
+upstream for us — prefer a **custom provider**, or route local traffic through an
+aggregator (OpenRouter) rather than overriding a native provider's base URL.
+
 Notes that bite (verified against the v1.6.x docs):
 
 - **JSON config only**, schema at <https://www.getbifrost.ai/schema>. We run
