@@ -19,14 +19,12 @@ ceilings, caching, and an evidence trail behind it — on a
 | ⚙️ | [AgenticOps](https://github.com/Moai-Team-LLC/AgenticOps) | Runtime & fleet operations — manifests, scheduling, durable backlog, bounded runs, fleet health | Apache-2.0 |
 | 🧠 | [AgenticMind](https://github.com/Moai-Team-LLC/AgenticMind) | Auditable knowledge & memory: grounded answers, guardrails, evidence sink | Apache-2.0 |
 | 📈 | [AgenticPerformance](https://github.com/Moai-Team-LLC/AgenticPerformance) | Evals & observability: OTel traces, golden-set evals, improvement loop | Apache-2.0 |
-| 🩹 | [AgenticSelfHealingCode](https://github.com/Moai-Team-LLC/AgenticSelfHealingCode) | Self-healing: repairs what breaks in production | Apache-2.0 |
 | 🌉 | **AgenticGateway** (this repo) | Model & cost plane: one key, measured routing, ceilings, cache, evidence | Apache-2.0 |
 | 🛡️ | [AgenticAssurance](https://github.com/Moai-Team-LLC/AgenticAssurance) | Security assurance: red-teams any agent, Cycle-of-Trust policy pack | MIT |
 
 **How they compose.** **AgenticOps** runs the fleet, **AgenticMind** gives
 agents auditable knowledge & memory, **AgenticPerformance** measures every run
-with traces and evals, and **AgenticSelfHealingCode** repairs what breaks —
-closing the **run → remember → measure → heal** loop. **AgenticGateway** is the
+with traces and evals — closing the **run → remember → measure** loop. **AgenticGateway** is the
 model plane every LLM call in that loop passes through — one key, eval-measured
 routing, cost ceilings — and **AgenticAssurance** red-teams any agent in the
 loop, with the whole stack conforming to the
