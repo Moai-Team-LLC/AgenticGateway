@@ -17,7 +17,13 @@ import { cacheKey, type ExactCache } from "../cache/exact"
 import { checkSpendAnomaly, throttleKey } from "../cost/anomaly"
 import { checkBudgets, recordSpend } from "../cost/budgets"
 import { recordLedger, setJudgeVerdict, type LedgerEntry } from "../cost/ledger"
-import { costUsd, DEFAULT_PRICES, type Price } from "../cost/pricing"
+import {
+  cacheAdjustedCostUsd,
+  cacheSavingsRatio,
+  DEFAULT_PRICES,
+  type Price,
+  type TokenSplit,
+} from "../cost/pricing"
 import type { OtelExporter } from "../cost/otel"
 import { guardRequest, guardResponseLeak } from "../delegate/guard"
 import { makeJudgeCaller, shouldJudge, type JudgeCaller } from "../delegate/judge"
@@ -60,7 +66,36 @@ export interface HotDeps {
 interface Usage {
   prompt_tokens?: number
   completion_tokens?: number
+  /** OpenAI prompt-cache detail (cached_tokens is a SUBSET of prompt_tokens). */
+  prompt_tokens_details?: { cached_tokens?: number }
+  /** Anthropic-shaped usage (some Bifrost passthroughs): input_tokens EXCLUDES cache. */
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
 }
+
+/** Normalize a provider usage object into a cache-role split, across OpenAI + Anthropic
+ * shapes. OpenAI: prompt_tokens includes cached_tokens (read), no explicit write. Anthropic:
+ * input_tokens excludes cache; read/write are separate fields. */
+const splitUsage = (u: Usage | null | undefined): TokenSplit => {
+  if (u === null || u === undefined) return { freshInput: 0, cacheWrite: 0, cacheRead: 0, output: 0 }
+  const output = u.completion_tokens ?? u.output_tokens ?? 0
+  if (u.cache_read_input_tokens !== undefined || u.cache_creation_input_tokens !== undefined) {
+    return {
+      freshInput: u.input_tokens ?? u.prompt_tokens ?? 0,
+      cacheWrite: u.cache_creation_input_tokens ?? 0,
+      cacheRead: u.cache_read_input_tokens ?? 0,
+      output,
+    }
+  }
+  const prompt = u.prompt_tokens ?? u.input_tokens ?? 0
+  const cacheRead = u.prompt_tokens_details?.cached_tokens ?? 0
+  return { freshInput: Math.max(0, prompt - cacheRead), cacheWrite: 0, cacheRead, output }
+}
+
+const hasUsageTokens = (u: Usage | null | undefined): boolean =>
+  u !== null && u !== undefined && (u.prompt_tokens !== undefined || u.input_tokens !== undefined)
 
 const JUDGE_ITEM_MAX_CHARS = 4000
 /** Bounds the leak/judge text and per-call tool-call JSON kept from a stream —
@@ -298,18 +333,24 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
 
     const finalize = (facts: FinalizeFacts): void => {
       try {
-        const inTok = facts.usage?.prompt_tokens ?? null
-        const outTok = facts.usage?.completion_tokens ?? null
         const routeUsed = facts.routeUsed ?? decision.model
-        // A cache hit costs $0 (real); a served response whose usage never
-        // arrived is UNMETERED — record NULL cost (never a silent zero) and
-        // warn, so under-metering is visible rather than looking free.
-        const metered = !facts.cacheHit && inTok !== null
+        const split = splitUsage(facts.usage)
+        const metered = !facts.cacheHit && hasUsageTokens(facts.usage)
+        // Total input across the cache split (OpenAI prompt_tokens already includes cached).
+        const inTok = hasUsageTokens(facts.usage)
+          ? split.freshInput + split.cacheWrite + split.cacheRead
+          : null
+        const outTok = hasUsageTokens(facts.usage) ? split.output : null
+        // A cache hit costs $0 (real); a served response whose usage never arrived is
+        // UNMETERED — record NULL cost (never a silent zero) and warn. Cost is
+        // CACHE-ADJUSTED: a provider prompt-cache read is billed ≈−90%, so a flat
+        // total-token cost overstates spend ~6× when cache-read dominates.
         const costUsdValue: number | null = facts.cacheHit
           ? 0
           : inTok === null
             ? null
-            : costUsd(routeUsed, inTok, outTok ?? 0, prices).usd
+            : cacheAdjustedCostUsd(routeUsed, split, prices).usd
+        const cacheSavings: number | null = metered ? cacheSavingsRatio(routeUsed, split, prices) : null
         if (!facts.cacheHit && inTok === null && (facts.outcome === "ok" || facts.outcome === "client_aborted")) {
           log("warn", "unmetered_response", { request_id: requestId, route: routeUsed, outcome: facts.outcome })
         }
@@ -324,10 +365,13 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           inputTokens: inTok,
           outputTokens: outTok,
           costUsd: costUsdValue,
+          cacheReadTokens: metered ? split.cacheRead : null,
+          cacheWriteTokens: metered ? split.cacheWrite : null,
+          cacheSavingsRatio: cacheSavings,
           latencyMs: facts.latencyMs,
         })
         if (metered) {
-          recordSpend(db, tenantId, runId, inTok + (outTok ?? 0), costUsdValue ?? 0)
+          recordSpend(db, tenantId, runId, (inTok ?? 0) + (outTok ?? 0), costUsdValue ?? 0)
         }
         deps.evidence.emit({
           event: "GatewayRequest",
@@ -341,6 +385,7 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           tokens: inTok === null ? undefined : inTok + (outTok ?? 0),
           ...(costUsdValue === null ? {} : { cost_usd: costUsdValue }),
           cache_hit: facts.cacheHit,
+          ...(cacheSavings === null ? {} : { cache_savings_ratio: cacheSavings }),
           tags: facts.piiKinds.map((k) => `pii:${k}`),
         } as Parameters<EvidenceEmitter["emit"]>[0])
         if (facts.protectedFlagged) {
@@ -376,6 +421,8 @@ export const makeChatHandler = (deps: HotDeps): ((req: Request) => Promise<Respo
           costUsd: costUsdValue,
           outcome: facts.outcome,
           cacheHit: facts.cacheHit,
+          cacheSavingsRatio: cacheSavings,
+          cacheReadTokens: metered ? split.cacheRead : null,
           startMs,
           endMs: Date.now(),
         })

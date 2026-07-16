@@ -10,6 +10,7 @@
 import type { Database } from "bun:sqlite"
 
 import { makeExactCache } from "../cache/exact"
+import { costPerVerifiedOutcome } from "../cost/ledger"
 import { makeOtelExporter, type OtelExporter } from "../cost/otel"
 import { loadPrices, type Price } from "../cost/pricing"
 import { makeEvidenceEmitter, type EvidenceEmitter } from "../delegate/evidence"
@@ -42,6 +43,18 @@ const adminHandler = (cfg: Config, db: Database, path: string, req: Request): Re
   if (path === "/admin/policy") {
     return json(200, {
       rows: db.query("SELECT tenant_id, eval_run_id, synced_at, doc FROM routing_policies").all(),
+    })
+  }
+  if (path === "/admin/cost-per-verified") {
+    // The cost/quality-plane headline: cache-adjusted $ per verify-passing outcome.
+    const params = new URL(req.url).searchParams
+    const tenant = params.get("tenant")
+    const since = Number(params.get("since"))
+    return json(200, {
+      ...costPerVerifiedOutcome(db, {
+        ...(tenant === null ? {} : { tenantId: tenant }),
+        ...(Number.isFinite(since) && since > 0 ? { sinceMs: since } : {}),
+      }),
     })
   }
   return json(404, { error: "not found" })

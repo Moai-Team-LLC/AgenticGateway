@@ -13,7 +13,22 @@ import { z } from "zod"
 export interface Price {
   inPerMTok: number
   outPerMTok: number
+  /** Cache-read price per MTok. Defaults to inPerMTok × 0.1 (Anthropic ≈ −90%). */
+  cacheReadPerMTok?: number
+  /** Cache-write price per MTok. Defaults to inPerMTok × 1.25 (Anthropic ≈ +25%). */
+  cacheWritePerMTok?: number
 }
+
+/** Token usage split by cache role — fresh (full price) / written / read / output. */
+export interface TokenSplit {
+  freshInput: number
+  cacheWrite: number
+  cacheRead: number
+  output: number
+}
+
+const DEFAULT_CACHE_READ_MULT = 0.1
+const DEFAULT_CACHE_WRITE_MULT = 1.25
 
 /** Checked against provider list prices, 2026-07. */
 export const DEFAULT_PRICES: Record<string, Price> = {
@@ -34,7 +49,12 @@ export const UNKNOWN_MODEL_PRICE: Price = { inPerMTok: 15, outPerMTok: 75 }
 
 const priceFileSchema = z.record(
   z.string(),
-  z.object({ inPerMTok: z.number().nonnegative(), outPerMTok: z.number().nonnegative() }),
+  z.object({
+    inPerMTok: z.number().nonnegative(),
+    outPerMTok: z.number().nonnegative(),
+    cacheReadPerMTok: z.number().nonnegative().optional(),
+    cacheWritePerMTok: z.number().nonnegative().optional(),
+  }),
 )
 
 export const loadPrices = (path: string): Result<Record<string, Price>, string> => {
@@ -59,4 +79,55 @@ export const costUsd = (
     usd: (inputTokens * p.inPerMTok + outputTokens * p.outPerMTok) / 1_000_000,
     known: price !== undefined,
   }
+}
+
+/**
+ * Cache-adjusted $ cost — weights each token by cache role. Under provider prompt caching a
+ * cache-READ is billed at ≈−90%, so a cost on TOTAL input tokens overstates spend ~6× when
+ * cache-read dominates (measured on our own dev env: 96.5% cache-read). This is the honest
+ * cost the ledger and cost-per-verified must use; the flat `costUsd` above overstates.
+ */
+export const cacheAdjustedCostUsd = (
+  route: string,
+  split: TokenSplit,
+  prices: Record<string, Price> = DEFAULT_PRICES,
+): { usd: number; known: boolean } => {
+  const price = prices[route]
+  const p = price ?? UNKNOWN_MODEL_PRICE
+  const crRate = p.cacheReadPerMTok ?? p.inPerMTok * DEFAULT_CACHE_READ_MULT
+  const cwRate = p.cacheWritePerMTok ?? p.inPerMTok * DEFAULT_CACHE_WRITE_MULT
+  const usd =
+    (split.freshInput * p.inPerMTok +
+      split.cacheWrite * cwRate +
+      split.cacheRead * crRate +
+      split.output * p.outPerMTok) /
+    1_000_000
+  return { usd, known: price !== undefined }
+}
+
+/** The cache-BLIND cost (every input-side token at full input rate) — the overstatement
+ * `cacheAdjustedCostUsd` corrects; kept so `cacheSavingsRatio` can quantify the gap. */
+export const nominalCostUsd = (
+  route: string,
+  split: TokenSplit,
+  prices: Record<string, Price> = DEFAULT_PRICES,
+): number => {
+  const p = prices[route] ?? UNKNOWN_MODEL_PRICE
+  return (
+    ((split.freshInput + split.cacheWrite + split.cacheRead) * p.inPerMTok +
+      split.output * p.outPerMTok) /
+    1_000_000
+  )
+}
+
+/** Fraction (0..1) that cache adjustment cuts the naive cost — a FinOps signal (a low, or
+ * falling, ratio on a long agent = a churning prefix invalidating cache). 0 for an empty call. */
+export const cacheSavingsRatio = (
+  route: string,
+  split: TokenSplit,
+  prices: Record<string, Price> = DEFAULT_PRICES,
+): number => {
+  const nominal = nominalCostUsd(route, split, prices)
+  if (nominal === 0) return 0
+  return Math.max(0, 1 - cacheAdjustedCostUsd(route, split, prices).usd / nominal)
 }
