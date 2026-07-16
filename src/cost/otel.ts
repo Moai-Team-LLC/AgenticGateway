@@ -19,9 +19,14 @@ export interface SpanFacts {
   provider: string
   inputTokens: number | null
   outputTokens: number | null
+  /** Cache-adjusted $ (honest under provider prompt caching). */
   costUsd: number | null
   outcome: string
   cacheHit: boolean
+  /** 1 − cache-adjusted/nominal cost — how much prompt caching saved this call. */
+  cacheSavingsRatio?: number | null
+  /** Provider prompt-cache read tokens (≈ −90% price). */
+  cacheReadTokens?: number | null
   startMs: number
   endMs: number
 }
@@ -62,6 +67,10 @@ const toSpan = (f: SpanFacts): Record<string, unknown> => {
   ]
   if (f.inputTokens !== null) attributes.push(attr("gen_ai.usage.input_tokens", f.inputTokens))
   if (f.outputTokens !== null) attributes.push(attr("gen_ai.usage.output_tokens", f.outputTokens))
+  if (f.cacheSavingsRatio !== null && f.cacheSavingsRatio !== undefined)
+    attributes.push(attr("apl.cache_savings_ratio", f.cacheSavingsRatio))
+  if (f.cacheReadTokens !== null && f.cacheReadTokens !== undefined)
+    attributes.push(attr("gen_ai.usage.cache_read_input_tokens", f.cacheReadTokens))
   return {
     traceId: parent === null ? randomBytes(16).toString("hex") : parent[1],
     spanId: randomBytes(8).toString("hex"),

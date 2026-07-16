@@ -66,9 +66,12 @@ CREATE TABLE IF NOT EXISTS request_ledger (
   cache_hit            INTEGER NOT NULL DEFAULT 0,
   input_tokens         INTEGER,
   output_tokens        INTEGER,
-  cost_usd             REAL,
+  cost_usd             REAL,                -- cache-adjusted $ (honest under prompt caching)
   latency_ms           REAL,
   judge_verdict        TEXT,                -- 'pass' | 'fail' when sampled
+  cache_read_tokens    INTEGER,             -- provider prompt-cache read tokens (≈ −90%)
+  cache_write_tokens   INTEGER,             -- provider prompt-cache write tokens (≈ +25%)
+  cache_savings_ratio  REAL,                -- 1 − adjusted/nominal cost; FinOps signal
   created_at           INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ledger_tenant_time ON request_ledger (tenant_id, created_at DESC);
@@ -92,5 +95,18 @@ export const openDb = (path: string): Database => {
   // instead of throwing SQLITE_BUSY into the hot path or the async lane.
   db.exec("PRAGMA busy_timeout = 5000;")
   db.exec(SCHEMA)
+  // Add-only migration for ledgers created before the cache-split columns. SQLite has no
+  // ADD COLUMN IF NOT EXISTS; a duplicate-column error means it is already present — ignore.
+  for (const col of [
+    "cache_read_tokens INTEGER",
+    "cache_write_tokens INTEGER",
+    "cache_savings_ratio REAL",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE request_ledger ADD COLUMN ${col}`)
+    } catch {
+      // column already exists (fresh DB created by SCHEMA above) — no-op
+    }
+  }
   return db
 }

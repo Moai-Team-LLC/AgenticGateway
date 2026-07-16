@@ -34,8 +34,11 @@ export interface EvidenceEvent {
   reason?: string
   tags?: string[]
   tokens?: number
+  /** Cache-adjusted $ (honest under provider prompt caching). */
   cost_usd?: number
   cache_hit?: boolean
+  /** 1 − cache-adjusted/nominal cost — how much prompt caching saved this call. */
+  cache_savings_ratio?: number
 }
 
 export interface EvidenceEmitter {
